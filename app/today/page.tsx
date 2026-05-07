@@ -1,14 +1,9 @@
 'use client'
 
-// app/today/page.tsx
-// Today View — 오늘 scheduled_date인 태스크를 프로젝트별로 묶어 표시
-
 import { useEffect, useState, useCallback } from 'react'
-import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import type { TaskStatus, EnergyCost } from '@/types'
 
-// ── 조인 결과 타입
 interface TodayTask {
   id: string
   title: string
@@ -23,53 +18,31 @@ interface TodayTask {
   milestones: {
     id: string
     title: string
-    projects: {
-      id: string
-      title: string
-      mode: string
-    }
+    projects: { id: string; title: string; mode: string }
   }
 }
 
-// ── 날짜 포맷
-function getTodayLabel(dateStr: string) {
-  const d = new Date(dateStr + 'T00:00:00')
-  const days = ['일', '월', '화', '수', '목', '금', '토']
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${days[d.getDay()]})`
-}
-
-// ── 프로젝트별 그룹화
 function groupByProject(tasks: TodayTask[]) {
   const map = new Map<string, { projectTitle: string; mode: string; tasks: TodayTask[] }>()
   for (const task of tasks) {
     const pid = task.milestones.projects.id
     if (!map.has(pid)) {
-      map.set(pid, {
-        projectTitle: task.milestones.projects.title,
-        mode: task.milestones.projects.mode,
-        tasks: [],
-      })
+      map.set(pid, { projectTitle: task.milestones.projects.title, mode: task.milestones.projects.mode, tasks: [] })
     }
     map.get(pid)!.tasks.push(task)
   }
   return Array.from(map.values())
 }
 
-const ENERGY_DOT: Record<string, string> = {
-  low: 'bg-green-400',
-  mid: 'bg-yellow-400',
-  high: 'bg-red-400',
-}
-
-const CATEGORY_COLOR: Record<string, string> = {
-  must: 'text-red-400',
-  nice: 'text-yellow-400',
-  optional: 'text-gray-500',
+function getTodayLabel() {
+  const d = new Date()
+  const days = ['SUN','MON','TUE','WED','THU','FRI','SAT']
+  const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+  return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()}`
 }
 
 export default function TodayPage() {
   const today = new Date().toISOString().split('T')[0]
-
   const [tasks, setTasks] = useState<TodayTask[]>([])
   const [loading, setLoading] = useState(true)
   const [toggling, setToggling] = useState<string | null>(null)
@@ -78,177 +51,123 @@ export default function TodayPage() {
     setLoading(true)
     const { data } = await supabase
       .from('tasks')
-      .select(`
-        id, title, status, category, importance,
-        estimated_min, energy_cost, context_type,
-        scheduled_date, completed_at,
-        milestones (
-          id, title,
-          projects ( id, title, mode )
-        )
-      `)
+      .select(`id, title, status, category, importance, estimated_min, energy_cost, context_type, scheduled_date, completed_at,
+        milestones ( id, title, projects ( id, title, mode ) )`)
       .eq('scheduled_date', today)
       .neq('status', 'skip')
       .order('importance', { ascending: false })
-
     if (data) setTasks(data as unknown as TodayTask[])
     setLoading(false)
   }, [today])
 
-  useEffect(() => {
-    fetchTasks()
-  }, [fetchTasks])
+  useEffect(() => { fetchTasks() }, [fetchTasks])
 
   const toggleStatus = async (task: TodayTask) => {
     if (toggling) return
     setToggling(task.id)
     const newStatus: TaskStatus = task.status === 'done' ? 'todo' : 'done'
-    await supabase
-      .from('tasks')
-      .update({
-        status: newStatus,
-        completed_at: newStatus === 'done' ? new Date().toISOString() : null,
-      })
-      .eq('id', task.id)
+    await supabase.from('tasks').update({
+      status: newStatus,
+      completed_at: newStatus === 'done' ? new Date().toISOString() : null,
+    }).eq('id', task.id)
     await fetchTasks()
     setToggling(null)
   }
 
-  const doneTasks = tasks.filter((t) => t.status === 'done').length
-  const totalMin = tasks.reduce((sum, t) => sum + (t.estimated_min ?? 0), 0)
+  const doneTasks = tasks.filter(t => t.status === 'done').length
+  const totalMin = tasks.reduce((s, t) => s + (t.estimated_min ?? 0), 0)
   const groups = groupByProject(tasks)
+  const pct = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-6 max-w-2xl mx-auto">
-      <Link href="/" className="text-gray-500 text-sm hover:text-gray-300 mb-6 block">
-        ← 홈
-      </Link>
-
-      {/* 헤더 */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold">Today</h1>
-        <p className="text-gray-500 text-sm mt-1">{getTodayLabel(today)}</p>
+    <div className="fade-in">
+      <div className="page-header">
+        <div>
+          <div className="page-title">Today</div>
+          <div className="page-subtitle">
+            {getTodayLabel()} · {doneTasks} DONE · {tasks.length - doneTasks} REMAINING
+          </div>
+        </div>
       </div>
 
       {loading ? (
-        <p className="text-gray-500 text-sm">불러오는 중...</p>
+        <div className="metric-label" style={{ paddingTop: 20 }}>Loading...</div>
       ) : tasks.length === 0 ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-          <p className="text-gray-400 text-sm">오늘 예정된 태스크가 없어요.</p>
-          <p className="text-gray-600 text-xs mt-2">
-            태스크에 오늘 날짜로 예정일을 설정하면 여기에 나타납니다.
-          </p>
+        <div className="glass-card" style={{ textAlign: 'center', padding: '48px 20px' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No tasks scheduled for today.</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, letterSpacing: '0.06em' }}>
+            Add a scheduled date to tasks to see them here.
+          </div>
         </div>
       ) : (
         <>
-          {/* 진행률 요약 */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6">
-            <div className="flex justify-between text-sm mb-2">
-              <span className="text-gray-400">
-                <span className="text-white font-semibold">{doneTasks}</span>
-                <span className="text-gray-500"> / {tasks.length} 완료</span>
-              </span>
+          {/* Progress Summary */}
+          <div className="metric-card" style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div>
+                <span style={{ fontSize: 22, fontWeight: 700, color: 'var(--neon)' }}>{pct}%</span>
+                <span style={{ fontSize: 10, color: 'var(--text-secondary)', marginLeft: 10, letterSpacing: '0.08em' }}>
+                  {doneTasks} / {tasks.length} DONE
+                </span>
+              </div>
               {totalMin > 0 && (
-                <span className="text-gray-500 text-xs">
-                  총 {totalMin >= 60
-                    ? `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
-                    : `${totalMin}m`}
+                <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>
+                  {totalMin >= 60 ? `${Math.floor(totalMin/60)}h ${totalMin%60}m` : `${totalMin}m`} TOTAL
                 </span>
               )}
             </div>
-            <div className="w-full bg-gray-800 rounded-full h-2">
-              <div
-                className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
-                style={{ width: `${tasks.length ? (doneTasks / tasks.length) * 100 : 0}%` }}
-              />
+            <div className="progress-track" style={{ marginTop: 0 }}>
+              <div className="progress-fill" style={{ width: `${pct}%` }} />
             </div>
           </div>
 
-          {/* 프로젝트별 그룹 */}
-          <div className="space-y-6">
-            {groups.map((group) => (
-              <div key={group.projectTitle}>
-                {/* 프로젝트 헤더 */}
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                    {group.projectTitle}
-                  </span>
-                  {group.mode === 'exam' && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300">exam</span>
+          {/* Task Groups */}
+          {groups.map(group => (
+            <div key={group.projectTitle} className="today-group">
+              <div className="today-group-header">
+                <div className="today-group-label">{group.projectTitle}</div>
+                <div className="today-group-count">{group.tasks.length} tasks</div>
+                {group.mode === 'exam' && (
+                  <span style={{ fontSize: 8, padding: '1px 6px', borderRadius: 3, background: 'var(--danger-dim)', color: 'var(--danger)', border: '1px solid rgba(255,77,77,0.2)' }}>EXAM</span>
+                )}
+              </div>
+              {group.tasks.map(task => (
+                <div
+                  key={task.id}
+                  className="task-item"
+                  onClick={() => toggleStatus(task)}
+                  style={{ opacity: toggling === task.id ? 0.5 : 1 }}
+                >
+                  <div className={`task-check ${task.status === 'done' ? 'done' : ''}`}>
+                    {task.status === 'done' && (
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#00FFA3" strokeWidth="2">
+                        <path d="M1.5 4l2 2 3-3"/>
+                      </svg>
+                    )}
+                  </div>
+                  <div className={`task-name ${task.status === 'done' ? 'done' : ''}`}>
+                    {task.title}
+                  </div>
+                  <div
+                    className="task-priority"
+                    style={{
+                      background: task.category === 'must' ? 'var(--danger)'
+                        : task.category === 'nice' ? 'var(--warning)'
+                        : 'var(--base-300)'
+                    }}
+                  />
+                  <div className={`task-tag ${task.status === 'done' ? '' : task.category}`}>
+                    {task.status === 'done' ? 'Done' : task.category}
+                  </div>
+                  {task.estimated_min && (
+                    <div className="task-tag">{task.estimated_min}m</div>
                   )}
                 </div>
-
-                {/* 태스크 목록 */}
-                <ul className="space-y-2">
-                  {group.tasks.map((task) => (
-                    <li
-                      key={task.id}
-                      className={`bg-gray-900 border rounded-xl p-4 flex items-start gap-3 transition ${
-                        task.status === 'done'
-                          ? 'border-gray-800 opacity-60'
-                          : 'border-gray-800 hover:border-gray-700'
-                      }`}
-                    >
-                      {/* 완료 토글 */}
-                      <button
-                        onClick={() => toggleStatus(task)}
-                        disabled={toggling === task.id}
-                        className={`mt-0.5 w-5 h-5 rounded-full border-2 flex-shrink-0 transition ${
-                          task.status === 'done'
-                            ? 'bg-indigo-500 border-indigo-500'
-                            : 'border-gray-600 hover:border-indigo-400'
-                        } ${toggling === task.id ? 'opacity-50' : ''}`}
-                      >
-                        {task.status === 'done' && (
-                          <span className="flex items-center justify-center text-white text-xs leading-none">✓</span>
-                        )}
-                      </button>
-
-                      <div className="flex-1 min-w-0">
-                        {/* 제목 */}
-                        <p
-                          className={`text-sm font-medium leading-snug ${
-                            task.status === 'done'
-                              ? 'line-through text-gray-500'
-                              : 'text-white'
-                          }`}
-                        >
-                          {task.title}
-                        </p>
-
-                        {/* 태그 행 */}
-                        <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs">
-                          {/* 에너지 */}
-                          <span className="flex items-center gap-1 text-gray-500">
-                            <span className={`w-1.5 h-1.5 rounded-full ${ENERGY_DOT[task.energy_cost]}`} />
-                            {task.energy_cost}
-                          </span>
-
-                          {/* 카테고리 */}
-                          <span className={CATEGORY_COLOR[task.category]}>{task.category}</span>
-
-                          {/* 컨텍스트 */}
-                          <span className="text-gray-600">{task.context_type}</span>
-
-                          {/* 예상 시간 */}
-                          {task.estimated_min && (
-                            <span className="text-gray-600">⏱ {task.estimated_min}분</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 중요도 */}
-                      <span className="text-yellow-500 text-xs flex-shrink-0 mt-0.5">
-                        {'★'.repeat(task.importance)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ))}
         </>
       )}
-    </main>
+    </div>
   )
 }

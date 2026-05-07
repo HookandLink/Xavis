@@ -1,82 +1,55 @@
 'use client'
 
-// app/projects/[id]/page.tsx
-// Project 상세 + Milestone 목록/생성 + 위험도 분석
-
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import type { Project, Milestone, NewMilestone } from '@/types'
 
-// ── 위험도 계산
 interface RiskInfo {
-  score: number          // 0~100
+  score: number
   level: '안전' | '주의' | '위험'
-  color: string
-  bg: string
   daysRemaining: number | null
   totalTasks: number
   doneTasks: number
   todoTasks: number
 }
 
-function calcRisk(
-  project: Project,
-  totalTasks: number,
-  doneTasks: number
-): RiskInfo {
+function calcRisk(project: Project, totalTasks: number, doneTasks: number): RiskInfo {
   const todoTasks = totalTasks - doneTasks
   let score = 0
   let daysRemaining: number | null = null
 
   if (project.deadline) {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+    const today = new Date(); today.setHours(0, 0, 0, 0)
     const dl = new Date(project.deadline + 'T00:00:00')
     daysRemaining = Math.ceil((dl.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
     if (daysRemaining < 0) {
-      score = 100 // 이미 마감 초과
+      score = 100
     } else {
-      // 완료율
       const completionRate = totalTasks > 0 ? doneTasks / totalTasks : 1
       if (completionRate < 0.3) score += 25
       else if (completionRate < 0.6) score += 10
-
-      // 남은 일수 vs 남은 태스크
       if (daysRemaining < todoTasks) score += 35
       else if (daysRemaining < todoTasks * 1.5) score += 15
-
-      // 촉박함
       if (daysRemaining <= 1) score += 25
       else if (daysRemaining <= 3) score += 15
       else if (daysRemaining <= 7) score += 5
-
-      // 중요도 가중치
       if (project.importance >= 4) score += 10
     }
   } else {
-    // 마감일 없음 — 완료율 기반만
     const completionRate = totalTasks > 0 ? doneTasks / totalTasks : 1
     if (completionRate < 0.2) score = 30
     else if (completionRate < 0.5) score = 15
   }
 
   score = Math.min(100, Math.max(0, score))
-
   const level = score >= 67 ? '위험' : score >= 34 ? '주의' : '안전'
-  const color = score >= 67 ? 'text-red-400' : score >= 34 ? 'text-yellow-400' : 'text-green-400'
-  const bg = score >= 67 ? 'bg-red-900/30 border-red-800' : score >= 34 ? 'bg-yellow-900/30 border-yellow-800' : 'bg-green-900/20 border-green-900'
-
-  return { score, level, color, bg, daysRemaining, totalTasks, doneTasks, todoTasks }
+  return { score, level, daysRemaining, totalTasks, doneTasks, todoTasks }
 }
 
-interface Advice {
-  title: string
-  action: string
-  effect: string
-}
+interface Advice { title: string; action: string; effect: string }
 
 export default function ProjectDetailPage() {
   const params = useParams()
@@ -88,17 +61,10 @@ export default function ProjectDetailPage() {
   const [showForm, setShowForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [risk, setRisk] = useState<RiskInfo | null>(null)
-
-  // 대안책
   const [advice, setAdvice] = useState<Advice[] | null>(null)
   const [adviceLoading, setAdviceLoading] = useState(false)
   const [adviceError, setAdviceError] = useState<string | null>(null)
-
-  const [form, setForm] = useState<Omit<NewMilestone, 'project_id'>>({
-    title: '',
-    due_date: '',
-    order_index: 0,
-  })
+  const [form, setForm] = useState<Omit<NewMilestone, 'project_id'>>({ title: '', due_date: '', order_index: 0 })
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -106,16 +72,11 @@ export default function ProjectDetailPage() {
       supabase.from('projects').select('*').eq('id', projectId).single(),
       supabase.from('milestones').select('*').eq('project_id', projectId).order('order_index', { ascending: true }),
     ])
-
     if (proj) {
       setProject(proj)
-      // 프로젝트 전체 태스크 집계
       const milestoneIds = (miles ?? []).map((m) => m.id)
       if (milestoneIds.length > 0) {
-        const { data: taskData } = await supabase
-          .from('tasks')
-          .select('id, status')
-          .in('milestone_id', milestoneIds)
+        const { data: taskData } = await supabase.from('tasks').select('id, status').in('milestone_id', milestoneIds)
         const total = taskData?.length ?? 0
         const done = taskData?.filter((t) => t.status === 'done').length ?? 0
         setRisk(calcRisk(proj, total, done))
@@ -127,24 +88,16 @@ export default function ProjectDetailPage() {
     setLoading(false)
   }, [projectId])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
-
-  useEffect(() => {
-    setForm((prev) => ({ ...prev, order_index: milestones.length }))
-  }, [milestones.length])
+  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { setForm((prev) => ({ ...prev, order_index: milestones.length })) }, [milestones.length])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.title.trim()) return
     setSubmitting(true)
     await supabase.from('milestones').insert([{
-      project_id: projectId,
-      title: form.title.trim(),
-      due_date: form.due_date || null,
-      order_index: form.order_index,
-      status: 'todo',
+      project_id: projectId, title: form.title.trim(),
+      due_date: form.due_date || null, order_index: form.order_index, status: 'todo',
     }])
     setForm({ title: '', due_date: '', order_index: 0 })
     setShowForm(false)
@@ -154,209 +107,173 @@ export default function ProjectDetailPage() {
 
   const handleGetAdvice = async () => {
     if (!project || !risk) return
-    setAdviceLoading(true)
-    setAdviceError(null)
-    setAdvice(null)
-
+    setAdviceLoading(true); setAdviceError(null); setAdvice(null)
     const res = await fetch('/api/risk-advice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        projectTitle: project.title,
-        deadline: project.deadline,
-        daysRemaining: risk.daysRemaining,
-        totalTasks: risk.totalTasks,
-        doneTasks: risk.doneTasks,
-        todoTasks: risk.todoTasks,
-        riskScore: risk.score,
-        riskLevel: risk.level,
+        projectTitle: project.title, deadline: project.deadline,
+        daysRemaining: risk.daysRemaining, totalTasks: risk.totalTasks,
+        doneTasks: risk.doneTasks, todoTasks: risk.todoTasks,
+        riskScore: risk.score, riskLevel: risk.level,
       }),
     })
-
     const data = await res.json()
-    if (!res.ok || !data.advice) {
-      setAdviceError(data.error ?? 'AI 응답 실패')
-    } else {
-      setAdvice(data.advice)
-    }
+    if (!res.ok || !data.advice) setAdviceError(data.error ?? 'AI 응답 실패')
+    else setAdvice(data.advice)
     setAdviceLoading(false)
   }
 
-  if (loading) return <main className="min-h-screen bg-gray-950 text-white p-6"><p className="text-gray-500 text-sm">불러오는 중...</p></main>
+  if (loading) return <div className="fade-in metric-label" style={{ paddingTop: 20 }}>Loading...</div>
   if (!project) return (
-    <main className="min-h-screen bg-gray-950 text-white p-6">
-      <p className="text-red-400 text-sm">프로젝트를 찾을 수 없습니다.</p>
-      <Link href="/projects" className="text-indigo-400 text-sm mt-2 block">← Projects로 돌아가기</Link>
-    </main>
+    <div className="fade-in">
+      <p style={{ color: 'var(--danger)', fontSize: 12 }}>프로젝트를 찾을 수 없습니다.</p>
+      <Link href="/projects" style={{ color: 'var(--neon)', fontSize: 11 }}>← Projects</Link>
+    </div>
   )
 
-  return (
-    <main className="min-h-screen bg-gray-950 text-white p-6 max-w-2xl mx-auto">
-      <Link href="/projects" className="text-gray-500 text-sm hover:text-gray-300 mb-4 block">
-        ← Projects
-      </Link>
+  const riskColor = risk ? (risk.score >= 67 ? 'var(--danger)' : risk.score >= 34 ? 'var(--warning)' : 'var(--neon)') : 'var(--neon)'
+  const riskLabel = risk ? (risk.level === '위험' ? 'HIGH RISK' : risk.level === '주의' ? 'MID RISK' : 'ON TRACK') : ''
 
-      {/* 프로젝트 정보 */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-xl font-bold">{project.title}</h1>
-            {project.description && <p className="text-gray-400 text-sm mt-1">{project.description}</p>}
+  return (
+    <div className="fade-in">
+      <div className="page-header">
+        <div>
+          <Link href="/projects" className="metric-label" style={{ display: 'block', marginBottom: 4, fontSize: 9, letterSpacing: '0.1em' }}>← PROJECTS</Link>
+          <div className="page-title">{project.title}</div>
+          <div className="page-subtitle">
+            {project.deadline && `DUE: ${project.deadline} · `}
+            {'★'.repeat(project.importance)}
+            {project.mode === 'exam' && <span style={{ color: 'var(--danger)', marginLeft: 8 }}>EXAM MODE</span>}
           </div>
-          <span className={`text-xs px-2 py-1 rounded-full ${project.mode === 'exam' ? 'bg-red-900 text-red-300' : 'bg-gray-800 text-gray-400'}`}>
-            {project.mode}
-          </span>
         </div>
-        <div className="flex gap-3 mt-3 text-xs text-gray-500">
-          {project.deadline && <span>📅 마감 {project.deadline}</span>}
-          <span>중요도 {'★'.repeat(project.importance)}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <Link href={`/projects/${projectId}/workflow`} className="btn btn-ghost" style={{ fontSize: 9 }}>
+            WORKFLOW
+          </Link>
+          <button className="btn btn-neon" onClick={() => setShowForm(!showForm)}>
+            {showForm ? 'Cancel' : '+ Milestone'}
+          </button>
         </div>
       </div>
 
-      {/* ── 위험도 패널 */}
+      {project.description && (
+        <div className="glass-card" style={{ marginBottom: 16, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          {project.description}
+        </div>
+      )}
+
+      {/* Risk Panel */}
       {risk && (
-        <div className={`border rounded-xl p-4 mb-6 ${risk.bg}`}>
-          {/* 헤더 */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-200">위험도 분석</span>
-              <span className={`text-sm font-bold ${risk.color}`}>{risk.level}</span>
+        <div className={`glass-card ${risk.score >= 67 ? 'danger-accent' : risk.score < 34 ? 'neon-accent' : ''}`} style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div>
+              <div className="metric-label" style={{ marginBottom: 2 }}>Risk Analysis</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: riskColor }}>{riskLabel}</div>
             </div>
-            <span className={`text-2xl font-bold ${risk.color}`}>{risk.score}</span>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 32, fontWeight: 700, color: riskColor, fontFamily: 'var(--font-display)' }}>{risk.score}</div>
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>SCORE</div>
+            </div>
           </div>
 
-          {/* 게이지 */}
-          <div className="w-full bg-gray-800 rounded-full h-2 mb-3">
-            <div
-              className={`h-2 rounded-full transition-all ${
-                risk.score >= 67 ? 'bg-red-500' : risk.score >= 34 ? 'bg-yellow-500' : 'bg-green-500'
-              }`}
-              style={{ width: `${risk.score}%` }}
-            />
+          <div className="progress-track" style={{ marginBottom: 12 }}>
+            <div className={`progress-fill ${risk.score >= 67 ? 'danger' : risk.score >= 34 ? 'warning' : ''}`}
+              style={{ width: `${risk.score}%` }} />
           </div>
 
-          {/* 수치 */}
-          <div className="flex gap-4 text-xs text-gray-400 mb-3">
+          <div style={{ display: 'flex', gap: 16, fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 12 }}>
             {risk.daysRemaining !== null && (
-              <span className={risk.daysRemaining < 0 ? 'text-red-400' : ''}>
-                {risk.daysRemaining < 0 ? `⚠️ ${Math.abs(risk.daysRemaining)}일 초과` : `⏳ ${risk.daysRemaining}일 남음`}
+              <span style={{ color: risk.daysRemaining < 0 ? 'var(--danger)' : 'inherit' }}>
+                {risk.daysRemaining < 0 ? `${Math.abs(risk.daysRemaining)}D OVERDUE` : `${risk.daysRemaining}D LEFT`}
               </span>
             )}
-            <span>✅ {risk.doneTasks}/{risk.totalTasks} 완료</span>
-            <span>📋 미완료 {risk.todoTasks}개</span>
+            <span>{risk.doneTasks}/{risk.totalTasks} DONE</span>
+            <span>{risk.todoTasks} REMAINING</span>
           </div>
 
-          {/* 대안책 버튼 */}
           {!advice && (
-            <button
-              onClick={handleGetAdvice}
-              disabled={adviceLoading}
-              className="w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200 py-2 rounded-lg text-sm font-medium transition"
-            >
-              {adviceLoading ? 'AI 분석 중...' : '✨ AI 대안책 보기'}
+            <button onClick={handleGetAdvice} disabled={adviceLoading}
+              className="btn btn-ghost" style={{ width: '100%', fontSize: 10 }}>
+              {adviceLoading ? 'Analyzing...' : '✦ AI ALTERNATIVES'}
             </button>
           )}
-          {adviceError && <p className="text-red-400 text-xs mt-2">⚠️ {adviceError}</p>}
+          {adviceError && <p style={{ fontSize: 10, color: 'var(--danger)', marginTop: 6 }}>⚠ {adviceError}</p>}
 
-          {/* 대안책 결과 */}
           {advice && (
-            <div className="mt-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide">AI 대안책</p>
-                <button onClick={() => setAdvice(null)} className="text-xs text-gray-600 hover:text-gray-400">닫기</button>
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div className="metric-label" style={{ marginBottom: 0 }}>AI Alternatives</div>
+                <button onClick={() => setAdvice(null)} style={{ fontSize: 9, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>CLOSE</button>
               </div>
               {advice.map((a, i) => (
-                <div key={i} className="bg-gray-900/60 rounded-lg p-3">
-                  <p className="text-sm font-semibold text-white mb-1">{i + 1}. {a.title}</p>
-                  <p className="text-xs text-gray-300 mb-1">{a.action}</p>
-                  <p className="text-xs text-indigo-400">→ {a.effect}</p>
+                <div key={i} style={{ background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)', padding: '10px 12px', marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{i + 1}. {a.title}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 4 }}>{a.action}</div>
+                  <div style={{ fontSize: 10, color: 'var(--neon)' }}>→ {a.effect}</div>
                 </div>
               ))}
-              <button
-                onClick={handleGetAdvice}
-                disabled={adviceLoading}
-                className="w-full text-xs text-gray-600 hover:text-gray-400 py-1 transition"
-              >
-                {adviceLoading ? '분석 중...' : '다시 생성'}
+              <button onClick={handleGetAdvice} disabled={adviceLoading}
+                style={{ fontSize: 9, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', width: '100%', marginTop: 4 }}>
+                {adviceLoading ? 'Analyzing...' : 'Regenerate'}
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Milestones 헤더 */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Milestones</h2>
-        <div className="flex gap-2">
-          <Link
-            href={`/projects/${projectId}/workflow`}
-            className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg text-sm font-medium transition"
-          >
-            🗺 워크플로우
-          </Link>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"
-          >
-            {showForm ? '취소' : '+ 추가'}
-          </button>
-        </div>
-      </div>
-
-      {/* Milestone 생성 폼 */}
+      {/* New Milestone Form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-5 mb-5 space-y-4 border border-gray-800">
-          <h3 className="font-medium text-gray-200 text-sm">새 Milestone</h3>
-          <div>
-            <label className="text-sm text-gray-400 block mb-1">제목 *</label>
-            <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="마일스톤 이름"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" required />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">마감일 (선택)</label>
-              <input type="date" value={form.due_date ?? ''}
-                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+        <div className="x-form" style={{ marginBottom: 20 }}>
+          <div className="x-form-title">New Milestone</div>
+          <form onSubmit={handleSubmit}>
+            <div className="x-form-field">
+              <label className="x-label">Title *</label>
+              <input className="x-input" type="text" value={form.title}
+                onChange={e => setForm({ ...form, title: e.target.value })}
+                placeholder="Milestone name" required />
             </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">순서</label>
-              <input type="number" value={form.order_index}
-                onChange={(e) => setForm({ ...form, order_index: Number(e.target.value) })}
-                min={0} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
+            <div className="x-form-grid">
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Due Date</label>
+                <input className="x-input" type="date" value={form.due_date ?? ''}
+                  onChange={e => setForm({ ...form, due_date: e.target.value })} />
+              </div>
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Order</label>
+                <input className="x-input" type="number" value={form.order_index} min={0}
+                  onChange={e => setForm({ ...form, order_index: Number(e.target.value) })} />
+              </div>
             </div>
-          </div>
-          <button type="submit" disabled={submitting}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition">
-            {submitting ? '저장 중...' : 'Milestone 생성'}
-          </button>
-        </form>
+            <button type="submit" className="btn btn-neon" disabled={submitting} style={{ width: '100%', marginTop: 12 }}>
+              {submitting ? 'Creating...' : 'Create Milestone'}
+            </button>
+          </form>
+        </div>
       )}
 
-      {/* Milestone 목록 */}
+      {/* Milestones */}
+      <div className="metric-label" style={{ marginBottom: 10 }}>Milestones · {milestones.length}</div>
       {milestones.length === 0 ? (
-        <p className="text-gray-500 text-sm">마일스톤이 없습니다. 추가해보세요!</p>
+        <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No milestones yet.</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6, letterSpacing: '0.06em' }}>Add milestones to track your project.</div>
+        </div>
       ) : (
-        <ul className="space-y-3">
-          {milestones.map((m) => (
-            <li key={m.id}>
-              <Link href={`/projects/${projectId}/milestones/${m.id}`}
-                className="block bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-xl p-4 transition">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{m.title}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    m.status === 'active' ? 'bg-yellow-900 text-yellow-300'
-                    : m.status === 'done' ? 'bg-green-900 text-green-300'
-                    : 'bg-gray-800 text-gray-400'
-                  }`}>{m.status}</span>
-                </div>
-                {m.due_date && <p className="text-gray-500 text-xs mt-1">📅 {m.due_date}</p>}
-              </Link>
-            </li>
-          ))}
-        </ul>
+        milestones.map((m) => (
+          <Link key={m.id} href={`/projects/${projectId}/milestones/${m.id}`} className="task-item" style={{ display: 'flex', textDecoration: 'none', marginBottom: 6 }}>
+            <div className={`inbox-classify ${m.status === 'done' ? 'classify-note' : m.status === 'active' ? 'classify-task' : ''}`}
+              style={m.status === 'todo' ? { color: 'var(--text-muted)', background: 'transparent', border: '1px solid var(--glass-border)' } : {}}>
+              {m.status.toUpperCase()}
+            </div>
+            <div className="inbox-text" style={{ textDecoration: m.status === 'done' ? 'line-through' : 'none', color: m.status === 'done' ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+              {m.title}
+            </div>
+            {m.due_date && (
+              <div style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0, letterSpacing: '0.06em' }}>{m.due_date}</div>
+            )}
+          </Link>
+        ))
       )}
-    </main>
+    </div>
   )
 }

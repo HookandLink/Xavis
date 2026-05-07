@@ -1,20 +1,10 @@
 'use client'
 
-// app/projects/[id]/milestones/[milestoneId]/page.tsx
-// Milestone 상세 + Task 목록/생성 + AI 분해 + 자동 배치
-
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import type {
-  Milestone,
-  Task,
-  NewTask,
-  TaskCategory,
-  EnergyCost,
-  ContextType,
-} from '@/types'
+import type { Milestone, Task, NewTask, TaskCategory, EnergyCost, ContextType } from '@/types'
 
 const CONTEXT_TYPE_OPTIONS: ContextType[] = [
   'book', 'KAL', 'habit', 'exercise',
@@ -24,42 +14,32 @@ const CONTEXT_TYPE_OPTIONS: ContextType[] = [
 const IMPORTANCE_LABELS = ['', '★', '★★', '★★★', '★★★★', '★★★★★']
 
 const ENERGY_COLOR: Record<string, string> = {
-  low: 'text-green-400',
-  mid: 'text-yellow-400',
-  high: 'text-red-400',
+  low: 'var(--neon)',
+  mid: 'var(--warning)',
+  high: 'var(--danger)',
 }
 
-// ── 자동 배치: todo 태스크를 오늘부터 deadline까지 균등 분배
 function autoSchedule(tasks: Task[], deadline: string | null): Record<string, string> {
   const todo = tasks.filter((t) => t.status === 'todo' && !t.scheduled_date)
   if (todo.length === 0) return {}
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const today = new Date(); today.setHours(0, 0, 0, 0)
   const end = deadline ? new Date(deadline + 'T00:00:00') : new Date(today)
   if (!deadline) end.setDate(end.getDate() + todo.length)
-
-  // 날짜 배열 생성 (오늘 ~ deadline)
   const dates: string[] = []
   const cur = new Date(today)
-  while (cur <= end) {
-    dates.push(cur.toISOString().split('T')[0])
-    cur.setDate(cur.getDate() + 1)
-  }
+  while (cur <= end) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1) }
   if (dates.length === 0) dates.push(today.toISOString().split('T')[0])
-
-  // must → nice → optional 순 정렬
   const sorted = [...todo].sort((a, b) => {
     const order = { must: 0, nice: 1, optional: 2 }
     return (order[a.category] ?? 1) - (order[b.category] ?? 1)
   })
-
-  // 날짜별 균등 배분
   const result: Record<string, string> = {}
-  sorted.forEach((task, i) => {
-    result[task.id] = dates[i % dates.length]
-  })
+  sorted.forEach((task, i) => { result[task.id] = dates[i % dates.length] })
   return result
+}
+
+const CAT_CLASS: Record<string, string> = {
+  must: 'classify-task', nice: 'classify-idea', optional: 'classify-note',
 }
 
 export default function MilestoneDetailPage() {
@@ -73,30 +53,19 @@ export default function MilestoneDetailPage() {
   const [showForm, setShowForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [projectDeadline, setProjectDeadline] = useState<string | null>(null)
-
-  // AI 분해 상태
   const [showAI, setShowAI] = useState(false)
   const [aiDesc, setAiDesc] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
-
-  // 자동 배치 상태
   const [scheduling, setScheduling] = useState(false)
   const [scheduleResult, setScheduleResult] = useState<string | null>(null)
 
   const defaultForm: Omit<NewTask, 'milestone_id'> = {
-    title: '',
-    category: 'must',
-    importance: 3,
-    estimated_min: undefined,
-    energy_cost: 'mid',
-    context_type: 'major_study',
-    scheduled_date: '',
-    due_date: '',
+    title: '', category: 'must', importance: 3, estimated_min: undefined,
+    energy_cost: 'mid', context_type: 'major_study', scheduled_date: '', due_date: '',
   }
   const [form, setForm] = useState(defaultForm)
 
-  // ── 데이터 불러오기
   const fetchData = async () => {
     setLoading(true)
     const [{ data: mile }, { data: taskData }] = await Promise.all([
@@ -105,342 +74,260 @@ export default function MilestoneDetailPage() {
     ])
     if (mile) {
       setMilestone(mile)
-      // 프로젝트 deadline 가져오기
-      const { data: proj } = await supabase
-        .from('projects')
-        .select('deadline')
-        .eq('id', projectId)
-        .single()
+      const { data: proj } = await supabase.from('projects').select('deadline').eq('id', projectId).single()
       setProjectDeadline(proj?.deadline ?? null)
     }
     if (taskData) setTasks(taskData)
     setLoading(false)
   }
 
-  useEffect(() => {
-    fetchData()
-  }, [milestoneId])
+  useEffect(() => { fetchData() }, [milestoneId])
 
-  // ── Task 상태 토글
   const toggleTaskStatus = async (task: Task) => {
     const newStatus = task.status === 'done' ? 'todo' : 'done'
-    await supabase
-      .from('tasks')
-      .update({ status: newStatus, completed_at: newStatus === 'done' ? new Date().toISOString() : null })
-      .eq('id', task.id)
+    await supabase.from('tasks').update({
+      status: newStatus,
+      completed_at: newStatus === 'done' ? new Date().toISOString() : null,
+    }).eq('id', task.id)
     fetchData()
   }
 
-  // ── 수동 Task 폼 제출
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.title.trim()) return
     setSubmitting(true)
     await supabase.from('tasks').insert([{
-      milestone_id: milestoneId,
-      title: form.title.trim(),
-      category: form.category,
-      importance: form.importance,
-      estimated_min: form.estimated_min || null,
-      energy_cost: form.energy_cost,
-      context_type: form.context_type,
-      scheduled_date: form.scheduled_date || null,
-      due_date: form.due_date || null,
-      status: 'todo',
+      milestone_id: milestoneId, title: form.title.trim(), category: form.category,
+      importance: form.importance, estimated_min: form.estimated_min || null,
+      energy_cost: form.energy_cost, context_type: form.context_type,
+      scheduled_date: form.scheduled_date || null, due_date: form.due_date || null, status: 'todo',
     }])
-    setForm(defaultForm)
-    setShowForm(false)
-    fetchData()
-    setSubmitting(false)
+    setForm(defaultForm); setShowForm(false); fetchData(); setSubmitting(false)
   }
 
-  // ── AI 분해
   const handleDecompose = async () => {
     if (!aiDesc.trim()) return
-    setAiLoading(true)
-    setAiError(null)
-
+    setAiLoading(true); setAiError(null)
     const res = await fetch('/api/decompose', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        milestoneTitle: milestone?.title,
-        description: aiDesc,
-        deadline: milestone?.due_date ?? projectDeadline,
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ milestoneTitle: milestone?.title, description: aiDesc, deadline: milestone?.due_date ?? projectDeadline }),
     })
-
     const data = await res.json()
-    if (!res.ok || !data.tasks) {
-      setAiError(data.error ?? 'AI 분해 실패')
-      setAiLoading(false)
-      return
-    }
-
-    // 분해된 태스크 일괄 저장
+    if (!res.ok || !data.tasks) { setAiError(data.error ?? 'AI 분해 실패'); setAiLoading(false); return }
     const rows = data.tasks.map((t: Omit<NewTask, 'milestone_id'>) => ({
-      milestone_id: milestoneId,
-      title: t.title,
-      category: t.category ?? 'must',
-      importance: t.importance ?? 3,
-      estimated_min: t.estimated_min ?? null,
-      energy_cost: t.energy_cost ?? 'mid',
-      context_type: t.context_type ?? 'major_study',
-      status: 'todo',
+      milestone_id: milestoneId, title: t.title, category: t.category ?? 'must',
+      importance: t.importance ?? 3, estimated_min: t.estimated_min ?? null,
+      energy_cost: t.energy_cost ?? 'mid', context_type: t.context_type ?? 'major_study', status: 'todo',
     }))
-
     await supabase.from('tasks').insert(rows)
-    setAiDesc('')
-    setShowAI(false)
-    fetchData()
-    setAiLoading(false)
+    setAiDesc(''); setShowAI(false); fetchData(); setAiLoading(false)
   }
 
-  // ── 자동 배치
   const handleAutoSchedule = async () => {
-    setScheduling(true)
-    setScheduleResult(null)
-
+    setScheduling(true); setScheduleResult(null)
     const deadline = milestone?.due_date ?? projectDeadline
     const assignments = autoSchedule(tasks, deadline)
-
     if (Object.keys(assignments).length === 0) {
-      setScheduleResult('배치할 태스크가 없어요. (미완료 + 날짜 미배정 태스크 기준)')
-      setScheduling(false)
-      return
+      setScheduleResult('No tasks to schedule.'); setScheduling(false); return
     }
-
-    // 일괄 업데이트
-    await Promise.all(
-      Object.entries(assignments).map(([id, date]) =>
-        supabase.from('tasks').update({ scheduled_date: date }).eq('id', id)
-      )
-    )
-
-    setScheduleResult(`${Object.keys(assignments).length}개 태스크에 날짜를 배정했어요.`)
-    fetchData()
-    setScheduling(false)
+    await Promise.all(Object.entries(assignments).map(([id, date]) =>
+      supabase.from('tasks').update({ scheduled_date: date }).eq('id', id)
+    ))
+    setScheduleResult(`${Object.keys(assignments).length} tasks scheduled.`)
+    fetchData(); setScheduling(false)
   }
 
-  if (loading) return <main className="min-h-screen bg-gray-950 text-white p-6"><p className="text-gray-500 text-sm">불러오는 중...</p></main>
+  if (loading) return <div className="fade-in metric-label" style={{ paddingTop: 20 }}>Loading...</div>
   if (!milestone) return (
-    <main className="min-h-screen bg-gray-950 text-white p-6">
-      <p className="text-red-400 text-sm">마일스톤을 찾을 수 없습니다.</p>
-      <Link href={`/projects/${projectId}`} className="text-indigo-400 text-sm mt-2 block">← 프로젝트로 돌아가기</Link>
-    </main>
+    <div className="fade-in">
+      <p style={{ color: 'var(--danger)', fontSize: 12 }}>마일스톤을 찾을 수 없습니다.</p>
+      <Link href={`/projects/${projectId}`} style={{ color: 'var(--neon)', fontSize: 11 }}>← Project</Link>
+    </div>
   )
 
   const doneTasks = tasks.filter((t) => t.status === 'done').length
+  const pct = tasks.length > 0 ? Math.round((doneTasks / tasks.length) * 100) : 0
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-6 max-w-2xl mx-auto">
-      <Link href={`/projects/${projectId}`} className="text-gray-500 text-sm hover:text-gray-300 mb-4 block">
-        ← 프로젝트
-      </Link>
-
-      {/* 마일스톤 정보 */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">{milestone.title}</h1>
-          <span className={`text-xs px-2 py-1 rounded-full ${
-            milestone.status === 'active' ? 'bg-yellow-900 text-yellow-300'
-            : milestone.status === 'done' ? 'bg-green-900 text-green-300'
-            : 'bg-gray-800 text-gray-400'
-          }`}>{milestone.status}</span>
-        </div>
-        {milestone.due_date && <p className="text-gray-500 text-xs mt-2">📅 {milestone.due_date}</p>}
-        {tasks.length > 0 && (
-          <div className="mt-3">
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
-              <span>진행률</span>
-              <span>{doneTasks} / {tasks.length}</span>
-            </div>
-            <div className="w-full bg-gray-800 rounded-full h-1.5">
-              <div className="bg-indigo-500 h-1.5 rounded-full transition-all" style={{ width: `${tasks.length ? (doneTasks / tasks.length) * 100 : 0}%` }} />
-            </div>
+    <div className="fade-in">
+      <div className="page-header">
+        <div>
+          <Link href={`/projects/${projectId}`} className="metric-label" style={{ display: 'block', marginBottom: 4, fontSize: 9, letterSpacing: '0.1em' }}>← PROJECT</Link>
+          <div className="page-title">{milestone.title}</div>
+          <div className="page-subtitle">
+            {milestone.due_date ? `DUE: ${milestone.due_date} · ` : ''}
+            {doneTasks}/{tasks.length} DONE
           </div>
-        )}
+        </div>
+        <button className="btn btn-neon" onClick={() => setShowForm(!showForm)}>
+          {showForm ? 'Cancel' : '+ Task'}
+        </button>
       </div>
 
-      {/* ── AI 도구 패널 */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6 space-y-3">
-        <p className="text-xs text-gray-400 font-semibold uppercase tracking-wide">AI 도구</p>
+      {/* Progress */}
+      {tasks.length > 0 && (
+        <div className="metric-card" style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div className="metric-label" style={{ marginBottom: 0 }}>Progress</div>
+            <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--neon)' }}>{pct}%</span>
+          </div>
+          <div className="progress-track" style={{ marginTop: 0 }}>
+            <div className="progress-fill" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      )}
 
-        {/* AI 분해 */}
+      {/* AI Tools Panel */}
+      <div className="glass-card" style={{ marginBottom: 20 }}>
+        <div className="metric-label" style={{ marginBottom: 12 }}>AI Tools</div>
+
+        {/* AI Decompose */}
         <div>
-          <button
-            onClick={() => { setShowAI(!showAI); setAiError(null) }}
-            className="w-full flex items-center justify-between text-sm text-gray-300 hover:text-white transition"
-          >
-            <span>✨ AI로 태스크 자동 분해</span>
-            <span className="text-gray-600">{showAI ? '▲' : '▼'}</span>
+          <button onClick={() => { setShowAI(!showAI); setAiError(null) }}
+            style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-primary)' }}>✦ AI Auto-Decompose Tasks</span>
+            <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{showAI ? '▲' : '▼'}</span>
           </button>
-
           {showAI && (
-            <div className="mt-3 space-y-2">
-              <textarea
-                value={aiDesc}
-                onChange={(e) => setAiDesc(e.target.value)}
-                placeholder={`예: "${milestone.title}"을 위해 무엇을 해야 하는지 자유롭게 설명하세요`}
-                rows={3}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 resize-none"
-              />
-              {aiError && <p className="text-red-400 text-xs">⚠️ {aiError}</p>}
-              <button
-                onClick={handleDecompose}
-                disabled={aiLoading || !aiDesc.trim()}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white py-2 rounded-lg text-sm font-medium transition"
-              >
-                {aiLoading ? 'AI 분석 중...' : '태스크 생성하기'}
+            <div style={{ marginTop: 10 }}>
+              <textarea className="x-textarea" value={aiDesc} onChange={e => setAiDesc(e.target.value)}
+                placeholder={`Describe what needs to be done for "${milestone.title}"...`} rows={3} />
+              {aiError && <p style={{ fontSize: 10, color: 'var(--danger)', marginTop: 4 }}>⚠ {aiError}</p>}
+              <button onClick={handleDecompose} disabled={aiLoading || !aiDesc.trim()}
+                className="btn btn-neon" style={{ width: '100%', marginTop: 8 }}>
+                {aiLoading ? 'Analyzing...' : 'Generate Tasks'}
               </button>
             </div>
           )}
         </div>
 
-        <div className="border-t border-gray-800" />
+        <div style={{ height: 1, background: 'var(--glass-border)', margin: '12px 0' }} />
 
-        {/* 자동 배치 */}
-        <div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-300">📅 미배정 태스크 자동 배치</p>
-              <p className="text-xs text-gray-600 mt-0.5">
-                {milestone.due_date ?? projectDeadline
-                  ? `마감일(${milestone.due_date ?? projectDeadline})까지 균등 분배`
-                  : '마감일 없음 — 태스크 수만큼 날짜 배정'}
-              </p>
-            </div>
-            <button
-              onClick={handleAutoSchedule}
-              disabled={scheduling}
-              className="bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-            >
-              {scheduling ? '배치 중...' : '실행'}
-            </button>
-          </div>
-          {scheduleResult && (
-            <p className="text-xs text-indigo-400 mt-2">{scheduleResult}</p>
-          )}
-        </div>
-      </div>
-
-      {/* Tasks 헤더 */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Tasks</h2>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition"
-        >
-          {showForm ? '취소' : '+ 추가'}
-        </button>
-      </div>
-
-      {/* Task 생성 폼 */}
-      {showForm && (
-        <form onSubmit={handleSubmit} className="bg-gray-900 rounded-xl p-5 mb-5 space-y-4 border border-gray-800">
-          <h3 className="font-medium text-gray-200 text-sm">새 Task</h3>
+        {/* Auto Schedule */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <label className="text-sm text-gray-400 block mb-1">제목 *</label>
-            <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="할 일 이름"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" required />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">카테고리</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as TaskCategory })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-                <option value="must">must</option>
-                <option value="nice">nice</option>
-                <option value="optional">optional</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">중요도</label>
-              <select value={form.importance} onChange={(e) => setForm({ ...form, importance: Number(e.target.value) })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-                {[1,2,3,4,5].map((n) => <option key={n} value={n}>{IMPORTANCE_LABELS[n]}</option>)}
-              </select>
+            <div style={{ fontSize: 11, color: 'var(--text-primary)' }}>Auto-Schedule Tasks</div>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>
+              {milestone.due_date ?? projectDeadline
+                ? `Until ${milestone.due_date ?? projectDeadline}`
+                : 'No deadline — spread by task count'}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">에너지 소비</label>
-              <select value={form.energy_cost} onChange={(e) => setForm({ ...form, energy_cost: e.target.value as EnergyCost })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-                <option value="low">low 🟢</option>
-                <option value="mid">mid 🟡</option>
-                <option value="high">high 🔴</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">컨텍스트</label>
-              <select value={form.context_type} onChange={(e) => setForm({ ...form, context_type: e.target.value as ContextType })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500">
-                {CONTEXT_TYPE_OPTIONS.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="text-sm text-gray-400 block mb-1">예상 시간 (분, 선택)</label>
-            <input type="number" value={form.estimated_min ?? ''}
-              onChange={(e) => setForm({ ...form, estimated_min: e.target.value ? Number(e.target.value) : undefined })}
-              placeholder="예: 30" min={1}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">예정일 (선택)</label>
-              <input type="date" value={form.scheduled_date ?? ''}
-                onChange={(e) => setForm({ ...form, scheduled_date: e.target.value })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1">마감일 (선택)</label>
-              <input type="date" value={form.due_date ?? ''}
-                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-          <button type="submit" disabled={submitting}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition">
-            {submitting ? '저장 중...' : 'Task 생성'}
+          <button onClick={handleAutoSchedule} disabled={scheduling}
+            className="btn btn-ghost" style={{ fontSize: 9 }}>
+            {scheduling ? '...' : 'Run'}
           </button>
-        </form>
+        </div>
+        {scheduleResult && <p style={{ fontSize: 10, color: 'var(--neon)', marginTop: 6 }}>{scheduleResult}</p>}
+      </div>
+
+      {/* New Task Form */}
+      {showForm && (
+        <div className="x-form" style={{ marginBottom: 20 }}>
+          <div className="x-form-title">New Task</div>
+          <form onSubmit={handleSubmit}>
+            <div className="x-form-field">
+              <label className="x-label">Title *</label>
+              <input className="x-input" type="text" value={form.title}
+                onChange={e => setForm({ ...form, title: e.target.value })}
+                placeholder="Task name" required />
+            </div>
+            <div className="x-form-grid">
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Category</label>
+                <select className="x-select" value={form.category}
+                  onChange={e => setForm({ ...form, category: e.target.value as TaskCategory })}>
+                  <option value="must">must</option>
+                  <option value="nice">nice</option>
+                  <option value="optional">optional</option>
+                </select>
+              </div>
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Importance</label>
+                <select className="x-select" value={form.importance}
+                  onChange={e => setForm({ ...form, importance: Number(e.target.value) })}>
+                  {[1,2,3,4,5].map(n => <option key={n} value={n}>{IMPORTANCE_LABELS[n]}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="x-form-grid" style={{ marginTop: 12 }}>
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Energy Cost</label>
+                <select className="x-select" value={form.energy_cost}
+                  onChange={e => setForm({ ...form, energy_cost: e.target.value as EnergyCost })}>
+                  <option value="low">low</option>
+                  <option value="mid">mid</option>
+                  <option value="high">high</option>
+                </select>
+              </div>
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Context</label>
+                <select className="x-select" value={form.context_type}
+                  onChange={e => setForm({ ...form, context_type: e.target.value as ContextType })}>
+                  {CONTEXT_TYPE_OPTIONS.map(ct => <option key={ct} value={ct}>{ct}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="x-form-field" style={{ marginTop: 12 }}>
+              <label className="x-label">Estimated Time (min)</label>
+              <input className="x-input" type="number" value={form.estimated_min ?? ''}
+                onChange={e => setForm({ ...form, estimated_min: e.target.value ? Number(e.target.value) : undefined })}
+                placeholder="e.g. 30" min={1} />
+            </div>
+            <div className="x-form-grid">
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Scheduled Date</label>
+                <input className="x-input" type="date" value={form.scheduled_date ?? ''}
+                  onChange={e => setForm({ ...form, scheduled_date: e.target.value })} />
+              </div>
+              <div className="x-form-field" style={{ marginBottom: 0 }}>
+                <label className="x-label">Due Date</label>
+                <input className="x-input" type="date" value={form.due_date ?? ''}
+                  onChange={e => setForm({ ...form, due_date: e.target.value })} />
+              </div>
+            </div>
+            <button type="submit" className="btn btn-neon" disabled={submitting} style={{ width: '100%', marginTop: 12 }}>
+              {submitting ? 'Creating...' : 'Create Task'}
+            </button>
+          </form>
+        </div>
       )}
 
-      {/* Task 목록 */}
+      {/* Task List */}
+      <div className="metric-label" style={{ marginBottom: 10 }}>Tasks · {tasks.length}</div>
       {tasks.length === 0 ? (
-        <p className="text-gray-500 text-sm">태스크가 없습니다. 위 AI 도구로 자동 생성하거나 직접 추가해보세요.</p>
+        <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No tasks yet.</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 6 }}>Use AI decompose or add manually.</div>
+        </div>
       ) : (
-        <ul className="space-y-2">
-          {tasks.map((task) => (
-            <li key={task.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-start gap-3">
-              <button onClick={() => toggleTaskStatus(task)}
-                className={`mt-0.5 w-5 h-5 rounded-full border-2 flex-shrink-0 transition ${
-                  task.status === 'done' ? 'bg-green-500 border-green-500' : 'border-gray-600 hover:border-indigo-400'
-                }`} />
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${task.status === 'done' ? 'line-through text-gray-500' : 'text-white'}`}>
-                  {task.title}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-1 text-xs">
-                  <span className={`px-1.5 py-0.5 rounded ${
-                    task.category === 'must' ? 'bg-red-900/50 text-red-400'
-                    : task.category === 'nice' ? 'bg-yellow-900/50 text-yellow-400'
-                    : 'bg-gray-800 text-gray-500'
-                  }`}>{task.category}</span>
-                  <span className={ENERGY_COLOR[task.energy_cost]}>{task.energy_cost}</span>
-                  <span className="text-gray-500">{task.context_type}</span>
-                  {task.estimated_min && <span className="text-gray-500">⏱ {task.estimated_min}분</span>}
-                  {task.scheduled_date && <span className="text-indigo-400">📅 {task.scheduled_date}</span>}
-                </div>
+        tasks.map(task => (
+          <div key={task.id} className="task-item" style={{ opacity: task.status === 'done' ? 0.55 : 1, cursor: 'pointer', marginBottom: 6 }}
+            onClick={() => toggleTaskStatus(task)}>
+            <div className={`task-check ${task.status === 'done' ? 'done' : ''}`}>
+              {task.status === 'done' && (
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="#00FFA3" strokeWidth="2">
+                  <path d="M1.5 4l2 2 3-3"/>
+                </svg>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={`task-name ${task.status === 'done' ? 'done' : ''}`}>{task.title}</div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                <span className={`inbox-classify ${CAT_CLASS[task.category] ?? 'classify-note'}`}
+                  style={{ fontSize: 8, padding: '1px 6px' }}>
+                  {task.category}
+                </span>
+                <span style={{ fontSize: 9, color: ENERGY_COLOR[task.energy_cost] }}>{task.energy_cost}</span>
+                <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{task.context_type}</span>
+                {task.estimated_min && <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{task.estimated_min}m</span>}
+                {task.scheduled_date && <span style={{ fontSize: 9, color: 'var(--neon)' }}>{task.scheduled_date}</span>}
               </div>
-              <span className="text-yellow-400 text-xs flex-shrink-0">{'★'.repeat(task.importance)}</span>
-            </li>
-          ))}
-        </ul>
+            </div>
+            <span style={{ fontSize: 9, color: 'var(--warning)', flexShrink: 0 }}>{IMPORTANCE_LABELS[task.importance]}</span>
+          </div>
+        ))
       )}
-    </main>
+    </div>
   )
 }
